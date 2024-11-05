@@ -4,12 +4,20 @@ use cosmwasm_std::{ensure, Coin, Uint128};
 
 use crate::error::ContractError;
 
+/// A utility struct for managing and validating funds in a transaction
 pub struct FundManager {
+    /// Map of denomination to amount of funds
     funds: HashMap<String, Uint128>,
 }
 
 impl FundManager {
-    /// Create a new fund manager
+    /// Creates a new FundManager instance from a slice of Coins
+    ///
+    /// # Arguments
+    /// * `funds` - Slice of Coins to initialize the fund manager with
+    ///
+    /// # Returns
+    /// A new FundManager instance with the provided funds
     pub fn new(funds: &[Coin]) -> Self {
         let mut fund_manager = FundManager {
             funds: HashMap::new(),
@@ -20,12 +28,21 @@ impl FundManager {
         fund_manager
     }
 
-    /// Get the amount of funds in the manager for a given denom
+    /// Gets the amount of funds for a given denomination
+    ///
+    /// # Arguments
+    /// * `denom` - The denomination to get the amount for
+    ///
+    /// # Returns
+    /// The amount of funds for the denomination, or zero if not found
     pub fn get(&self, denom: &str) -> Uint128 {
         self.funds.get(denom).cloned().unwrap_or(Uint128::zero())
     }
 
-    /// Add funds to the manager
+    /// Adds funds to the manager
+    ///
+    /// # Arguments
+    /// * `fund` - The Coin to add to the manager
     pub fn add(&mut self, fund: &Coin) {
         *self
             .funds
@@ -33,7 +50,17 @@ impl FundManager {
             .or_insert(Uint128::zero()) += fund.amount;
     }
 
-    //   Use funds from the manager
+    /// Uses (deducts) funds from the manager
+    ///
+    /// # Arguments
+    /// * `amount` - The amount to deduct
+    /// * `denom` - The denomination to deduct from
+    ///
+    /// # Returns
+    /// * `Ok(())` if the funds were successfully deducted
+    /// * `Err(ContractError)` if:
+    ///   - The amount is zero
+    ///   - There are insufficient funds
     pub fn use_fund(&mut self, amount: Uint128, denom: &str) -> Result<(), ContractError> {
         ensure!(
             !amount.is_zero(),
@@ -47,7 +74,11 @@ impl FundManager {
         Ok(())
     }
 
-    /// Validate that there are no zero funds in the manager
+    /// Validates that all fund amounts are non-zero
+    ///
+    /// # Returns
+    /// * `Ok(())` if all fund amounts are non-zero
+    /// * `Err(ContractError)` if any fund amount is zero
     pub fn validate_non_zero_funds(&self) -> Result<(), ContractError> {
         ensure!(
             self.funds.iter().all(|(_, amount)| !amount.is_zero()),
@@ -56,7 +87,14 @@ impl FundManager {
         Ok(())
     }
 
-    /// Validate that there are no funds in the manager. To be used after all funds operations are done.
+    /// Validates that all fund amounts are zero
+    ///
+    /// This should be called after all fund operations are complete to ensure
+    /// no funds remain unaccounted for.
+    ///
+    /// # Returns
+    /// * `Ok(())` if all fund amounts are zero
+    /// * `Err(ContractError)` if any fund amount is non-zero
     pub fn validate_funds_are_empty(&self) -> Result<(), ContractError> {
         ensure!(
             self.funds.iter().all(|(_, amount)| amount.is_zero()),

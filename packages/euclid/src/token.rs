@@ -247,8 +247,11 @@ impl KeyDeserialize for Pair {
 }
 #[cw_serde]
 pub enum TokenType {
+    /// Native token with a denomination string (e.g. "uatom")
     Native { denom: String },
+    /// CW20 smart contract address
     Smart { contract_address: String },
+    /// Special voucher token type used for cross-chain transfers
     Voucher {},
 }
 
@@ -366,10 +369,14 @@ pub struct TokenWithAmount {
     pub amount: Uint128,
 }
 
+/// A token with its denomination type and amount
 #[cw_serde]
 pub struct TokenWithDenomAndAmount {
+    /// The token identifier
     pub token: Token,
+    /// The amount of tokens
     pub amount: Uint128,
+    /// The type of token (native, smart contract, or voucher)
     pub token_type: TokenType,
 }
 

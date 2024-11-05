@@ -78,6 +78,11 @@ impl KeyDeserialize for ChainUid {
 }
 
 #[cw_serde]
+/// Represents a user across different chains in the system
+///
+/// # Fields
+/// * `chain_uid` - The unique identifier of the chain this user belongs to
+/// * `address` - The user's address on their chain
 pub struct CrossChainUser {
     pub chain_uid: ChainUid,
     pub address: String,

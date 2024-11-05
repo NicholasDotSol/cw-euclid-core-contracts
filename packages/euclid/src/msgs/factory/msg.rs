@@ -23,11 +23,27 @@ pub struct InstantiateMsg {
 #[cw_serde]
 #[derive(cw_orch::ExecuteFns)]
 pub enum ExecuteMsg {
+    /// Adds liquidity to a pool by providing tokens
+    ///
+    /// * `pair_info` - Information about the token pair and amounts to add
+    /// * `slippage_tolerance_bps` - Maximum allowed slippage in basis points (1/10000)
+    /// * `timeout` - Optional timeout in seconds for the transaction
     AddLiquidityRequest {
         pair_info: PairWithDenomAndAmount,
         slippage_tolerance_bps: u64,
         timeout: Option<u64>,
     },
+
+    /// Executes a swap between tokens
+    ///
+    /// * `asset_in` - Token being swapped from
+    /// * `amount_in` - Amount of input token to swap
+    /// * `asset_out` - Token being swapped to
+    /// * `min_amount_out` - Minimum amount of output token to receive
+    /// * `timeout` - Optional timeout in seconds for the transaction
+    /// * `swaps` - Vector of intermediate swaps to perform
+    /// * `cross_chain_addresses` - Prioritized list of cross-chain addresses to receive tokens
+    /// * `partner_fee` - Optional partner fee configuration
     ExecuteSwapRequest {
         asset_in: TokenWithDenom,
         amount_in: Uint128,
@@ -37,15 +53,27 @@ pub enum ExecuteMsg {
         swaps: Vec<NextSwapPair>,
         // First element in array has highest priority
         cross_chain_addresses: Vec<CrossChainUserWithLimit>,
-
         partner_fee: Option<PartnerFee>,
     },
-    RequestRegisterDenom {
-        token: TokenWithDenom,
-    },
-    RequestDeregisterDenom {
-        token: TokenWithDenom,
-    },
+
+    /// Registers a new token denomination
+    ///
+    /// * `token` - Token with denomination to register
+    RequestRegisterDenom { token: TokenWithDenom },
+
+    /// Deregisters an existing token denomination
+    ///
+    /// * `token` - Token with denomination to deregister
+    RequestDeregisterDenom { token: TokenWithDenom },
+
+    /// Requests creation of a new liquidity pool
+    ///
+    /// * `pair` - Token pair with denominations for the pool
+    /// * `timeout` - Optional timeout in seconds for the transaction
+    /// * `lp_token_name` - Name for the LP token
+    /// * `lp_token_symbol` - Symbol for the LP token
+    /// * `lp_token_decimal` - Decimal places for the LP token
+    /// * `lp_token_marketing` - Optional marketing info for the LP token
     RequestPoolCreation {
         pair: PairWithDenom,
         timeout: Option<u64>,
@@ -54,56 +82,94 @@ pub enum ExecuteMsg {
         lp_token_decimal: u8,
         lp_token_marketing: Option<cw20_base::msg::InstantiateMarketingInfo>,
     },
+
+    /// Requests registration of an escrow for a token
+    ///
+    /// * `token` - Token with denomination to register escrow for
+    /// * `timeout` - Optional timeout in seconds for the transaction
     RequestRegisterEscrow {
         token: TokenWithDenom,
         timeout: Option<u64>,
     },
-    UpdateHubChannel {
-        new_channel: String,
-    },
+
+    /// Updates the IBC channel used for hub communication
+    ///
+    /// * `new_channel` - New channel ID to use
+    UpdateHubChannel { new_channel: String },
+
+    /// Withdraws tokens from virtual balance
+    ///
+    /// * `token` - Token to withdraw
+    /// * `amount` - Amount to withdraw
+    /// * `cross_chain_addresses` - Prioritized list of cross-chain addresses to receive tokens
+    /// * `timeout` - Optional timeout in seconds for the transaction
     WithdrawVirtualBalance {
         token: Token,
         amount: Uint128,
         cross_chain_addresses: Vec<CrossChainUserWithLimit>,
         timeout: Option<u64>,
     },
+
+    /// Transfers virtual balance between users
+    ///
+    /// * `token` - Token to transfer
+    /// * `amount` - Amount to transfer
+    /// * `recipient_address` - Cross-chain address of recipient
+    /// * `timeout` - Optional timeout in seconds for the transaction
     TransferVirtualBalance {
         token: Token,
         amount: Uint128,
         recipient_address: CrossChainUser,
         timeout: Option<u64>,
     },
+
+    /// Deposits tokens into the contract
+    ///
+    /// * `asset_in` - Token with denomination to deposit
+    /// * `amount_in` - Amount to deposit
+    /// * `timeout` - Optional timeout in seconds for the transaction
+    /// * `recipient` - Optional cross-chain recipient address
     DepositToken {
         asset_in: TokenWithDenom,
         amount_in: Uint128,
         timeout: Option<u64>,
         recipient: Option<CrossChainUser>,
     },
+
+    /// Updates factory contract state parameters
+    ///
+    /// * `router_contract` - Optional new router contract address
+    /// * `admin` - Optional new admin address
+    /// * `escrow_code_id` - Optional new escrow contract code ID
+    /// * `cw20_code_id` - Optional new CW20 contract code ID
+    /// * `is_native` - Optional flag for native token support
     UpdateFactoryState {
-        // The Router Contract Address on the Virtual Settlement Layer
         router_contract: Option<String>,
-        // Contract admin
         admin: Option<String>,
-        // Escrow Code ID
         escrow_code_id: Option<u64>,
-        // CW20 Code ID
         cw20_code_id: Option<u64>,
         is_native: Option<bool>,
     },
-    // Recieve CW20 TOKENS structure
+
+    /// Receives CW20 tokens
+    ///
+    /// * `cw20_msg` - CW20 receive message
     Receive(Cw20ReceiveMsg),
 
-    // IBC Callbacks
-    IbcCallbackAckAndTimeout {
-        ack: IbcPacketAckMsg,
-    },
-    // IBC Callbacks
-    IbcCallbackReceive {
-        receive_msg: IbcPacketReceiveMsg,
-    },
-    NativeReceiveCallback {
-        msg: Binary,
-    },
+    /// Handles IBC acknowledgment and timeout callbacks
+    ///
+    /// * `ack` - IBC packet acknowledgment message
+    IbcCallbackAckAndTimeout { ack: IbcPacketAckMsg },
+
+    /// Handles IBC receive callbacks
+    ///
+    /// * `receive_msg` - IBC packet receive message
+    IbcCallbackReceive { receive_msg: IbcPacketReceiveMsg },
+
+    /// Handles native token receive callbacks
+    ///
+    /// * `msg` - Callback message in binary format
+    NativeReceiveCallback { msg: Binary },
 }
 
 #[cw_serde]

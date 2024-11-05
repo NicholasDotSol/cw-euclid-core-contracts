@@ -79,6 +79,31 @@ impl ChainIbcExecuteMsg {
     }
 
     #[allow(clippy::too_many_arguments)]
+    /// Converts the ChainIbcExecuteMsg into a SubMsg that can be executed
+    ///
+    /// # Arguments
+    /// * `deps` - Mutable dependencies for accessing storage
+    /// * `env` - Environment info containing block time
+    /// * `router_contract` - Address of the router contract
+    /// * `chain_uid` - Chain identifier
+    /// * `is_native` - Whether this is a native or IBC message
+    /// * `channel` - IBC channel ID
+    /// * `timeout` - Timeout in seconds
+    ///
+    /// # Returns
+    /// * `Result<SubMsg, ContractError>` - SubMsg to be executed
+    ///
+    /// # Flow
+    /// For native messages:
+    /// 1. Creates a NativeReceiveCallback message for the router
+    /// 2. Gets and validates the next queue count from storage
+    /// 3. Saves the message to the queue
+    /// 4. Returns a SubMsg that will trigger a reply
+    ///
+    /// For IBC messages:
+    /// 1. Creates an IBC packet with the message data
+    /// 2. Sets timeout based on current block time
+    /// 3. Returns a SubMsg containing the IBC packet
     pub fn to_msg(
         &self,
         deps: &mut DepsMut,

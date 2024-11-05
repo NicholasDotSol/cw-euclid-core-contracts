@@ -54,6 +54,26 @@ pub fn execute_update_hub_channel(
 }
 
 // Function to send IBC request to Router in VSL to create a new pool
+/// Sends an IBC request to the Router contract in VSL to create a new liquidity pool
+///
+/// # Arguments
+/// * `pair_with_denom` - Token pair with denomination info for the new pool
+/// * `lp_token_name` - Name for the LP token
+/// * `lp_token_symbol` - Symbol for the LP token
+/// * `lp_token_decimal` - Decimal places for the LP token
+/// * `lp_token_marketing` - Optional marketing info for the LP token
+/// * `timeout` - Optional timeout in seconds
+///
+/// # Flow
+/// 1. Validates the pair and generates a transaction ID
+/// 2. Checks that pool doesn't already exist and tx isn't pending
+/// 3. For each token in the pair:
+///    - Skips validation for voucher tokens
+///    - For non-voucher tokens, checks if token exists in escrow and has valid denomination
+///    - Requires at least one token to already exist in the system
+/// 4. Validates LP token parameters including marketing info
+/// 5. Saves pending pool request to state
+/// 6. Sends IBC message to router to create pool
 pub fn execute_request_pool_creation(
     deps: &mut DepsMut,
     env: Env,
@@ -65,6 +85,7 @@ pub fn execute_request_pool_creation(
     lp_token_marketing: Option<cw20_base::msg::InstantiateMarketingInfo>,
     timeout: Option<u64>,
 ) -> Result<Response, ContractError> {
+    // Get pair and state info
     let pair = pair_with_denom.get_pair()?;
     let state = STATE.load(deps.storage)?;
     let sender = CrossChainUser {
@@ -73,6 +94,7 @@ pub fn execute_request_pool_creation(
     };
     let tx_id = generate_tx(deps.branch(), &env, &sender)?;
 
+    // Verify request doesn't already exist
     ensure!(
         !PENDING_POOL_REQUESTS.has(deps.storage, (info.sender.clone(), tx_id.clone())),
         ContractError::TxAlreadyExist {}
@@ -81,6 +103,8 @@ pub fn execute_request_pool_creation(
         !PAIR_TO_VLP.has(deps.storage, pair.get_tupple()),
         ContractError::PoolAlreadyExists {}
     );
+
+    // Validate tokens in the pair
     let mut one_token_already_exists = false;
     let tokens = pair_with_denom.get_vec_token_info();
     for token in tokens {
@@ -109,6 +133,7 @@ pub fn execute_request_pool_creation(
         }
     }
 
+    // At least one token must already exist in the system
     ensure!(
         one_token_already_exists,
         ContractError::new(
@@ -133,6 +158,7 @@ pub fn execute_request_pool_creation(
         }
     }
 
+    // Create and validate LP token instantiate message
     let lp_token_instantiate_msg = cw20_base::msg::InstantiateMsg {
         name: lp_token_name,
         symbol: lp_token_symbol,
@@ -146,6 +172,7 @@ pub fn execute_request_pool_creation(
     };
     lp_token_instantiate_msg.validate()?;
 
+    // Create and save pool request
     let req = PoolCreateRequest {
         tx_id: tx_id.clone(),
         sender: info.sender.to_string(),
@@ -155,6 +182,7 @@ pub fn execute_request_pool_creation(
 
     PENDING_POOL_REQUESTS.save(deps.storage, (info.sender.clone(), tx_id.clone()), &req)?;
 
+    // Create and send IBC message to router
     let pool_create_msg = ChainIbcExecuteMsg::RequestPoolCreation {
         pair: pair_with_denom,
         sender,
@@ -181,6 +209,23 @@ pub fn execute_request_pool_creation(
         .add_submessage(pool_create_msg))
 }
 
+/// Handles a request to register a new escrow contract for a token
+///
+/// # Arguments
+/// * `deps` - Mutable dependencies
+/// * `env` - Environment info
+/// * `info` - Message info containing sender
+/// * `token` - Token with denomination to register escrow for
+/// * `timeout` - Optional timeout for IBC message
+///
+/// # Flow
+/// 1. Validates token is not a voucher type
+/// 2. Verifies sender is admin
+/// 3. Generates transaction ID
+/// 4. Checks escrow doesn't already exist for token
+/// 5. Creates IBC message to request escrow creation on router
+/// 6. Saves pending escrow request
+/// 7. Returns response with events and submessage
 pub fn execute_request_register_escrow(
     deps: &mut DepsMut,
     env: Env,
@@ -194,26 +239,32 @@ pub fn execute_request_register_escrow(
         ContractError::UnsupportedDenomination {}
     );
 
+    // Only admin can register escrow contracts
     let state = STATE.load(deps.storage)?;
     ensure!(state.admin == info.sender, ContractError::Unauthorized {});
 
+    // Generate unique transaction ID for this request
     let sender = CrossChainUser {
         address: info.sender.to_string(),
         chain_uid: state.chain_uid.clone(),
     };
     let tx_id = generate_tx(deps.branch(), &env, &sender)?;
 
+    // Verify this transaction ID isn't already used
     ensure!(
         !PENDING_ESCROW_REQUESTS.has(deps.storage, (info.sender.clone(), tx_id.clone())),
         ContractError::TxAlreadyExist {}
     );
 
+    // Check token doesn't already have an escrow contract
     let escrow_address = TOKEN_TO_ESCROW.has(deps.storage, token.clone().token);
     ensure!(!escrow_address, ContractError::TokenAlreadyExist {});
 
+    // Get IBC channel and timeout
     let channel = HUB_CHANNEL.load(deps.storage)?;
     let timeout = get_timeout(timeout)?;
 
+    // Create IBC message to request escrow creation
     let register_escrow_msg = ChainIbcExecuteMsg::RequestEscrowCreation {
         token: token.clone().token,
         sender,
@@ -229,6 +280,7 @@ pub fn execute_request_register_escrow(
         timeout,
     )?;
 
+    // Save pending request
     let req = EscrowCreateRequest {
         tx_id: tx_id.clone(),
         sender: info.sender.to_string(),
@@ -248,8 +300,28 @@ pub fn execute_request_register_escrow(
         .add_submessage(register_escrow_msg))
 }
 
-// Add liquidity to the pool
-// TODO look into alternatives of using .branch(), maybe unifying the functions would help
+/// Adds liquidity to a pool by providing tokens
+///
+/// # Arguments
+/// * `deps` - Mutable dependencies
+/// * `info` - Message info containing sender and funds
+/// * `env` - Environment info
+/// * `pair_info` - Token pair info with denominations and amounts
+/// * `slippage_tolerance_bps` - Maximum allowed slippage in basis points (1/10000)
+/// * `timeout` - Optional timeout in seconds
+///
+/// # Flow
+/// 1. Validates pair info and slippage tolerance
+/// 2. Generates transaction ID and checks it's not already used
+/// 3. Verifies pool exists
+/// 4. For each token in the pair:
+///    - Validates amount is not zero
+///    - For non-voucher tokens:
+///      * Verifies escrow exists and supports denomination
+///      * For native tokens: validates sufficient funds provided
+///      * For CW20 tokens: creates transfer message
+/// 5. Saves pending add liquidity request
+/// 6. Sends IBC message to router to add liquidity
 pub fn add_liquidity_request(
     deps: &mut DepsMut,
     info: MessageInfo,
@@ -258,6 +330,7 @@ pub fn add_liquidity_request(
     slippage_tolerance_bps: u64,
     timeout: Option<u64>,
 ) -> Result<Response, ContractError> {
+    // Validate pair info and get pair
     pair_info.validate()?;
     let pair = pair_info.get_pair()?;
 
@@ -269,26 +342,29 @@ pub fn add_liquidity_request(
     };
     let tx_id = generate_tx(deps.branch(), &env, &sender)?;
 
+    // Validate slippage tolerance is between 1 and 100%
     ensure!(
         (1..=BPS_100_PERCENT).contains(&slippage_tolerance_bps),
         ContractError::InvalidSlippageTolerance {}
     );
 
+    // Check transaction ID isn't already used
     ensure!(
         !PENDING_ADD_LIQUIDITY.has(deps.storage, (info.sender.clone(), tx_id.clone())),
         ContractError::TxAlreadyExist {}
     );
+    // Verify pool exists
     ensure!(
         PAIR_TO_VLP.has(deps.storage, pair.get_tupple()),
         ContractError::PoolDoesNotExist {}
     );
 
+    // Get IBC channel and timeout
     let channel = HUB_CHANNEL.load(deps.storage)?;
     let timeout = get_timeout(timeout)?;
 
     // Prepare msg vector
     let mut msgs: Vec<CosmosMsg> = Vec::new();
-
     let mut fund_manager = FundManager::new(&info.funds);
     // Do an early check for tokens escrow so that if it exists, it should allow the denom that we are sending
     let tokens = pair_info.get_vec_token_info();
@@ -298,6 +374,7 @@ pub fn add_liquidity_request(
 
         // Vouchers are not escrowed
         if !token.token_type.is_voucher() {
+            // Get and validate escrow contract
             let escrow_address = TOKEN_TO_ESCROW
                 .load(deps.storage, token.token)
                 .or(Err(ContractError::EscrowDoesNotExist {}))?;
@@ -313,6 +390,7 @@ pub fn add_liquidity_request(
                 ContractError::UnsupportedDenomination {}
             );
 
+            // Handle token type specific logic
             match token.token_type {
                 TokenType::Native { denom } => {
                     ensure!(
@@ -324,6 +402,7 @@ pub fn add_liquidity_request(
                     fund_manager.use_fund(token.amount, &denom)?;
                 }
                 TokenType::Smart { .. } => {
+                    // Create CW20 transfer message
                     let msg = token.token_type.create_transfer_msg(
                         token.amount,
                         env.contract.address.clone().to_string(),
@@ -336,11 +415,13 @@ pub fn add_liquidity_request(
         }
     }
 
+    // Verify no extra funds provided
     ensure!(
         fund_manager.validate_funds_are_empty().is_ok(),
         ContractError::new("Extra funds are not allowed")
     );
 
+    // Save pending add liquidity request
     let liquidity_tx_info = AddLiquidityRequest {
         sender: info.sender.to_string(),
         pair_info: pair_info.clone(),
@@ -353,6 +434,7 @@ pub fn add_liquidity_request(
         &liquidity_tx_info,
     )?;
 
+    // Create and send IBC message
     let add_liq_msg = ChainIbcExecuteMsg::AddLiquidity {
         sender,
         slippage_tolerance_bps,
@@ -381,8 +463,28 @@ pub fn add_liquidity_request(
         .add_submessage(add_liq_msg))
 }
 
-// Add liquidity to the pool
-// TODO look into alternatives of using .branch(), maybe unifying the functions would help
+/// Handles a request to remove liquidity from a pool
+///
+/// # Arguments
+/// * `deps` - Mutable dependencies for accessing storage
+/// * `info` - Message info containing sender and funds
+/// * `env` - Environment info containing block time
+/// * `sender` - Cross-chain user making the request
+/// * `pair` - Token pair identifying the pool
+/// * `lp_allocation` - Amount of LP tokens to burn
+/// * `timeout` - Optional timeout in seconds
+/// * `cross_chain_addresses` - List of cross-chain addresses to receive tokens
+///
+/// # Returns
+/// * `Result<Response, ContractError>` - Result containing response or error
+///
+/// # Flow
+/// 1. Validates sender and generates transaction ID
+/// 2. Checks that request doesn't already exist
+/// 3. Loads and validates VLP and CW20 token info
+/// 4. Verifies pool exists and LP allocation is non-zero
+/// 5. Saves pending remove liquidity request to state
+/// 6. Creates and sends IBC message to router
 pub fn remove_liquidity_request(
     deps: &mut DepsMut,
     info: MessageInfo,
@@ -398,16 +500,20 @@ pub fn remove_liquidity_request(
 
     let tx_id = generate_tx(deps.branch(), &env, &sender)?;
 
+    // Verify request doesn't already exist
     ensure!(
         !PENDING_REMOVE_LIQUIDITY.has(deps.storage, (sender_addr.clone(), tx_id.clone())),
         ContractError::TxAlreadyExist {}
     );
 
+    // Load VLP and CW20 token info
     let vlp = PAIR_TO_VLP.load(deps.storage, pair.get_tupple())?;
     let cw20 = VLP_TO_CW20.load(deps.storage, vlp)?;
 
+    // Verify sender is the CW20 contract
     ensure!(cw20 == info.sender, ContractError::Unauthorized {});
 
+    // Verify pool exists
     ensure!(
         PAIR_TO_VLP.has(deps.storage, pair.get_tupple()),
         ContractError::PoolDoesNotExist {}
@@ -420,6 +526,7 @@ pub fn remove_liquidity_request(
     // Check that the liquidity is greater than 0
     ensure!(!lp_allocation.is_zero(), ContractError::ZeroAssetAmount {});
 
+    // Save pending remove liquidity request
     let liquidity_tx_info = RemoveLiquidityRequest {
         sender: sender_addr.to_string(),
         lp_allocation,
@@ -434,6 +541,7 @@ pub fn remove_liquidity_request(
         &liquidity_tx_info,
     )?;
 
+    // Create and send IBC message
     let remove_liq_msg = ChainIbcExecuteMsg::RemoveLiquidity(ChainIbcRemoveLiquidityExecuteMsg {
         sender,
         lp_allocation,
@@ -462,8 +570,32 @@ pub fn remove_liquidity_request(
         .add_submessage(remove_liq_msg))
 }
 
-// TODO make execute_swap an internal function OR merge execute_swap_request and execute_swap into one function
-
+/// Executes a swap request between tokens
+///
+/// # Arguments
+/// * `deps` - Mutable dependencies for accessing storage
+/// * `env` - Environment info containing block time
+/// * `info` - Message info containing sender and funds
+/// * `sender` - Cross chain user initiating the swap
+/// * `asset_in` - Input token with denomination
+/// * `amount_in` - Amount of input token to swap
+/// * `asset_out` - Output token to receive
+/// * `min_amount_out` - Minimum amount of output token to receive
+/// * `swaps` - Vector of swap pairs defining the swap route
+/// * `timeout` - Optional timeout in seconds
+/// * `cross_chain_addresses` - Vector of cross chain users with limits
+/// * `partner_fee` - Optional partner fee info
+///
+/// # Flow
+/// 1. Validates input token and partner fee
+/// 2. For non-voucher tokens:
+///    - Verifies token is allowed in escrow
+///    - For native tokens: validates sufficient funds provided
+///    - For CW20 tokens: validates sender is token contract
+/// 3. Calculates partner fee amount and adjusts input amount
+/// 4. Validates swap route matches input/output tokens
+/// 5. Saves pending swap request to state
+/// 6. Creates and sends IBC message to router to execute swap
 pub fn execute_swap_request(
     deps: &mut DepsMut,
     env: Env,
@@ -486,6 +618,7 @@ pub fn execute_swap_request(
 
     let tx_id = generate_tx(deps.branch(), &env, &sender)?;
 
+    // Get and validate partner fee if provided
     let partner_fee_bps = partner_fee
         .clone()
         .map(|fee| fee.partner_fee_bps)
@@ -496,6 +629,7 @@ pub fn execute_swap_request(
         ContractError::InvalidPartnerFee {}
     );
 
+    // Handle non-voucher tokens
     if !asset_in.token_type.is_voucher() {
         // Verify that this asset is allowed
         let escrow = TOKEN_TO_ESCROW.load(deps.storage, asset_in.token.clone())?;
@@ -513,10 +647,11 @@ pub fn execute_swap_request(
         );
     }
 
+    // Validate funds based on token type
     let mut fund_manager = FundManager::new(&info.funds);
     match &asset_in.token_type {
         TokenType::Native { denom } => {
-            // Verify thatthe amount of funds passed is greater than the asset amount
+            // Verify that the amount of funds passed is greater than the asset amount
             fund_manager.use_fund(amount_in, denom)?;
         }
         TokenType::Smart { contract_address } => {
@@ -532,6 +667,7 @@ pub fn execute_swap_request(
         ContractError::new("Extra funds sent with message")
     );
 
+    // Calculate partner fee and adjust input amount
     let partner_fee_amount = amount_in.checked_mul_ceil(Decimal::bps(partner_fee_bps))?;
 
     let amount_in = amount_in.checked_sub(partner_fee_amount)?;
@@ -541,11 +677,13 @@ pub fn execute_swap_request(
     // Verify that the min amount out is greater than 0
     ensure!(!min_amount_out.is_zero(), ContractError::ZeroAssetAmount {});
 
+    // Check for duplicate transaction
     ensure!(
         !PENDING_SWAPS.has(deps.storage, (sender_addr.clone(), tx_id.clone())),
         ContractError::TxAlreadyExist {}
     );
 
+    // Validate swap route
     let first_swap = swaps.first().ok_or(ContractError::Generic {
         err: "Empty Swap not allowed".to_string(),
     })?;
@@ -564,15 +702,18 @@ pub fn execute_swap_request(
         ContractError::new("Amount out doesn't match swap route")
     );
 
+    // Get IBC channel and timeout
     let channel = HUB_CHANNEL.load(deps.storage)?;
     let timeout = get_timeout(timeout)?;
 
+    // Get partner fee recipient
     let partner_fee_recipient = partner_fee
         .clone()
         .map(|partner_fee| deps.api.addr_validate(&partner_fee.recipient))
         .transpose()?
         .unwrap_or(sender_addr.clone());
 
+    // Save pending swap request
     let swap_info = SwapRequest {
         sender: sender_addr.to_string(),
         asset_in: asset_in.clone(),
@@ -592,6 +733,7 @@ pub fn execute_swap_request(
         &swap_info,
     )?;
 
+    // Create and send IBC message
     let swap_msg = ChainIbcExecuteMsg::Swap(euclid_ibc::msg::ChainIbcSwapExecuteMsg {
         sender,
         asset_in,
@@ -629,6 +771,7 @@ pub fn execute_swap_request(
         .add_submessage(swap_msg))
 }
 
+/// Executes a token deposit request to another chain through IBC.
 pub fn execute_deposit_token(
     deps: &mut DepsMut,
     env: Env,
@@ -639,6 +782,7 @@ pub fn execute_deposit_token(
     timeout: Option<u64>,
     recipient: Option<CrossChainUser>,
 ) -> Result<Response, ContractError> {
+    // Ensure the asset is not a voucher token
     ensure!(
         !asset_in.token_type.is_voucher(),
         ContractError::UnsupportedDenomination {}
@@ -649,21 +793,23 @@ pub fn execute_deposit_token(
     let sender_addr = deps.api.addr_validate(&sender.address)?;
     let recipient = recipient.unwrap_or(sender.clone());
 
-    // Validate asset in
+    // Validate the input asset denomination
     asset_in.validate(deps.as_ref())?;
 
+    // Generate unique transaction ID
     let tx_id = generate_tx(deps.branch(), &env, &sender)?;
     let channel = HUB_CHANNEL.load(deps.storage)?;
 
     let timeout = get_timeout(timeout)?;
 
+    // Ensure this transaction hasn't been processed before
     ensure!(
         !PENDING_TOKEN_DEPOSIT.has(deps.storage, (sender_addr.clone(), tx_id.clone())),
         ContractError::TxAlreadyExist {}
     );
-    // Verify that this asset is allowed
-    let escrow = TOKEN_TO_ESCROW.load(deps.storage, asset_in.token.clone())?;
 
+    let escrow = TOKEN_TO_ESCROW.load(deps.storage, asset_in.token.clone())?;
+    // Query escrow to check if token is allowed
     let token_allowed: euclid::msgs::escrow::AllowedTokenResponse = deps.querier.query_wasm_smart(
         escrow,
         &euclid::msgs::escrow::QueryMsg::TokenAllowed {
@@ -674,6 +820,8 @@ pub fn execute_deposit_token(
         token_allowed.allowed,
         ContractError::UnsupportedDenomination {}
     );
+
+    // Manage and validate funds sent with message
     let mut fund_manager = FundManager::new(&info.funds);
 
     match &asset_in.token_type {
@@ -689,11 +837,13 @@ pub fn execute_deposit_token(
         TokenType::Voucher { .. } => {}
     }
 
+    // Ensure no extra funds were sent
     ensure!(
         fund_manager.validate_funds_are_empty().is_ok(),
         ContractError::new("Extra funds sent with message")
     );
 
+    // Create deposit token request info
     let deposit_token_info = DepositTokenRequest {
         sender: sender_addr.to_string(),
         asset_in: asset_in.clone(),
@@ -703,12 +853,14 @@ pub fn execute_deposit_token(
         recipient: recipient.clone(),
     };
 
+    // Save pending token deposit
     PENDING_TOKEN_DEPOSIT.save(
         deps.storage,
         (sender_addr.clone(), tx_id.clone()),
         &deposit_token_info,
     )?;
 
+    // Create and send IBC message
     let deposit_token_msg =
         ChainIbcExecuteMsg::DepositToken(euclid_ibc::msg::ChainIbcDepositTokenExecuteMsg {
             sender,
@@ -827,22 +979,25 @@ pub fn receive_cw20(
     }
 }
 
-// New factory functions //
+/// Registers a new token denomination in the escrow contract
 pub fn execute_request_register_denom(
     deps: DepsMut,
     info: MessageInfo,
     token: TokenWithDenom,
 ) -> Result<Response, ContractError> {
+    // Verify sender is admin
     let admin = STATE.load(deps.storage)?.admin;
     ensure!(
         admin == info.sender.into_string(),
         ContractError::Unauthorized {}
     );
 
+    // Get escrow contract address
     let escrow_address = TOKEN_TO_ESCROW
         .load(deps.storage, token.token.clone())
         .map_err(|_err| ContractError::EscrowDoesNotExist {})?;
 
+    // Create message to add allowed denomination
     let msg = CosmosMsg::Wasm(WasmMsg::Execute {
         contract_addr: escrow_address.into_string(),
         msg: to_json_binary(&euclid::msgs::escrow::ExecuteMsg::AddAllowedDenom {
@@ -857,21 +1012,25 @@ pub fn execute_request_register_denom(
         .add_attribute("denom", token.token_type.get_key()))
 }
 
+/// Deregisters a token denomination in the escrow contract
 pub fn execute_request_deregister_denom(
     deps: DepsMut,
     info: MessageInfo,
     token: TokenWithDenom,
 ) -> Result<Response, ContractError> {
+    // Verify sender is admin
     let admin = STATE.load(deps.storage)?.admin;
     ensure!(
         admin == info.sender.into_string(),
         ContractError::Unauthorized {}
     );
 
+    // Get escrow contract address
     let escrow_address = TOKEN_TO_ESCROW
         .load(deps.storage, token.token.clone())
         .map_err(|_err| ContractError::EscrowDoesNotExist {})?;
 
+    // Create message to disallow denomination
     let msg = CosmosMsg::Wasm(WasmMsg::Execute {
         contract_addr: escrow_address.into_string(),
         msg: to_json_binary(&euclid::msgs::escrow::ExecuteMsg::DisallowDenom {
@@ -886,6 +1045,7 @@ pub fn execute_request_deregister_denom(
         .add_attribute("denom", token.token_type.get_key()))
 }
 
+/// Executes a withdrawal of virtual balance to the router contract
 pub fn execute_withdraw_virtual_balance(
     deps: &mut DepsMut,
     env: Env,
@@ -934,6 +1094,7 @@ pub fn execute_withdraw_virtual_balance(
         .add_submessage(withdraw_msg))
 }
 
+/// Executes a transfer of virtual balance to the router contract
 pub fn execute_transfer_virtual_balance(
     deps: &mut DepsMut,
     env: Env,
@@ -987,6 +1148,8 @@ pub fn execute_transfer_virtual_balance(
         .add_attribute("method", "withdraw_virtual_balance")
         .add_submessage(withdraw_msg))
 }
+
+/// Updates the contract's state parameters
 pub fn execute_update_state(
     deps: DepsMut,
     info: MessageInfo,
