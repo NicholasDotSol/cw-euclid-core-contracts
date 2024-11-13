@@ -1,6 +1,8 @@
 use crate::contract::{execute, instantiate, query};
 use cw_orch::{interface, prelude::*};
-use euclid::msgs::router::{ExecuteMsg, InstantiateMsg, MigrateMsg, QueryMsg};
+use euclid::msgs::router::{ExecuteMsg, InstantiateMsg, QueryMsg};
+use euclid::msgs::vlp::MigrateMsg;
+
 pub const CONTRACT_ID: &str = "router_contract";
 
 #[interface(InstantiateMsg, ExecuteMsg, QueryMsg, MigrateMsg, id = CONTRACT_ID)]
@@ -11,6 +13,7 @@ impl<Chain> Uploadable for RouterContract<Chain> {
     fn wrapper() -> Box<dyn MockContract<Empty>> {
         Box::new(
             ContractWrapper::new_with_empty(execute, instantiate, query)
+                .with_migrate(crate::migrate::migrate)
                 .with_reply(crate::contract::reply)
                 .with_ibc(
                     crate::ibc::channel::ibc_channel_open,
