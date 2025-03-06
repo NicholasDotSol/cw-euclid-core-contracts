@@ -39,7 +39,7 @@ pub enum ChainIbcExecuteMsg {
         token: TokenWithDenom,
     },
 
-    // Register Denom for a token
+    #[serde(rename = "deregister_denom")]
     DeRegisterDenom {
         sender: CrossChainUser,
         tx_id: String,
