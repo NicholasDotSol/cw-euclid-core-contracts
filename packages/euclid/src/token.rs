@@ -8,7 +8,7 @@ use cosmwasm_std::{
 };
 use cw_storage_plus::{Key, KeyDeserialize, Prefixer, PrimaryKey};
 
-use crate::chain::CrossChainUser;
+use crate::chain::{ChainUid, CrossChainUser};
 use crate::error::ContractError;
 use crate::msgs::virtual_balance::ExecuteTransfer;
 
@@ -59,12 +59,18 @@ impl Token {
         amount: Uint128,
         from: CrossChainUser,
         to: CrossChainUser,
+        msg: Option<Binary>,
     ) -> Result<WasmMsg, ContractError> {
+        ensure!(
+            msg.is_none() || to.chain_uid == ChainUid::vsl_chain_uid()?,
+            ContractError::new("msg can only be set for VSL")
+        );
         let transfer_msg = crate::msgs::virtual_balance::ExecuteMsg::Transfer(ExecuteTransfer {
             amount,
             token_id: self.0.clone(),
             from,
             to,
+            msg,
         });
 
         let transfer_msg = WasmMsg::Execute {

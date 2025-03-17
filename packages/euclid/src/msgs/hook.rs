@@ -1,7 +1,7 @@
 use cosmwasm_schema::cw_serde;
-use cosmwasm_std::{to_json_binary, Binary};
+use cosmwasm_std::{to_json_binary, Binary, Uint128};
 
-use crate::error::ContractError;
+use crate::{chain::CrossChainUser, error::ContractError};
 
 #[cw_serde]
 pub struct EuclidReceive {
@@ -19,6 +19,28 @@ pub enum EuclidReceiverMsg {
 impl EuclidReceive {
     pub fn to_receiver_msg(&self) -> Result<Binary, ContractError> {
         Ok(to_json_binary(&EuclidReceiverMsg::EuclidReceive(
+            self.clone(),
+        ))?)
+    }
+}
+
+#[cw_serde]
+pub struct VoucherReceive {
+    pub sender: CrossChainUser,
+    pub token_id: String,
+    pub amount: Uint128,
+    pub msg: Binary,
+}
+
+// This is just a helper to properly serialize the above message
+#[cw_serde]
+pub enum VoucherReceiverMsg {
+    VoucherReceive(VoucherReceive),
+}
+
+impl VoucherReceive {
+    pub fn to_receiver_msg(&self) -> Result<Binary, ContractError> {
+        Ok(to_json_binary(&VoucherReceiverMsg::VoucherReceive(
             self.clone(),
         ))?)
     }

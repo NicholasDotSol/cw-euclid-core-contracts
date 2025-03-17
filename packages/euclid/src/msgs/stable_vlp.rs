@@ -8,6 +8,8 @@ use cosmwasm_schema::{cw_serde, QueryResponses};
 use cosmwasm_std::{Decimal256, Uint128, Uint64};
 use cw_asset::AssetInfo;
 
+use super::hook::VoucherReceive;
+
 #[cw_serde]
 pub struct InstantiateMsg {
     pub router: String,
@@ -66,6 +68,7 @@ pub enum ExecuteMsg {
         admin: Option<String>,
         amp_factor: Option<Uint64>,
     },
+    VoucherReceive(VoucherReceive)
 }
 
 #[cw_serde]

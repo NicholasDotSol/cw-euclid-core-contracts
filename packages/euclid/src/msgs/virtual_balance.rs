@@ -1,5 +1,5 @@
 use cosmwasm_schema::{cw_serde, QueryResponses};
-use cosmwasm_std::{Addr, Uint128};
+use cosmwasm_std::{Addr, Binary, Uint128};
 
 use crate::{chain::CrossChainUser, virtual_balance::BalanceKey};
 
@@ -42,6 +42,8 @@ pub struct ExecuteTransfer {
 
     // Destination Address
     pub to: CrossChainUser,
+
+    pub msg: Option<Binary>,
 }
 
 #[cw_serde]

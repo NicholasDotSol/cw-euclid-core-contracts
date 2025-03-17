@@ -7,6 +7,8 @@ use crate::{
 use cosmwasm_schema::{cw_serde, QueryResponses};
 use cosmwasm_std::Uint128;
 
+use super::hook::VoucherReceive;
+
 #[cw_serde]
 pub struct InstantiateMsg {
     pub router: String,
@@ -63,6 +65,7 @@ pub enum ExecuteMsg {
         last_updated: Option<u64>,
         admin: Option<String>,
     },
+    VoucherReceive(VoucherReceive),
 }
 
 #[cw_serde]
@@ -179,4 +182,14 @@ pub struct VlpSwapResponse {
     pub tx_id: String,
     pub asset_out: Token,
     pub amount_out: Uint128,
+}
+
+#[cw_serde]
+pub enum VoucherReceiveHookMsg {
+    Swap {
+        tx_id: String,
+        min_token_out: Uint128,
+        next_swaps: Vec<NextSwapVlp>,
+        test_fail: Option<bool>,
+    },
 }

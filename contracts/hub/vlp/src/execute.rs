@@ -317,6 +317,7 @@ pub fn remove_liquidity(
         token_1_liquidity,
         vlp_cross_chain_struct.clone(),
         sender.clone(),
+        None,
     )?;
 
     let token_2_transfer_msg = pair.token_2.create_virtual_balance_transfer_msg(
@@ -324,6 +325,7 @@ pub fn remove_liquidity(
         token_2_liquidity,
         vlp_cross_chain_struct,
         sender.clone(),
+        None,
     )?;
 
     Ok(Response::new()
@@ -477,6 +479,7 @@ pub fn execute_swap(
 
                 // Destination Address
                 to: fee.recipient,
+                msg: None,
             });
 
         let euclid_fee_transfer_msg = WasmMsg::Execute {

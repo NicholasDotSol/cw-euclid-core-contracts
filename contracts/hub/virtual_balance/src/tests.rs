@@ -130,6 +130,7 @@ mod tests {
             token_id: "token1".to_string(),
             from: cross_chain_user,
             to: cross_chain_user_2,
+            msg: None,
         });
 
         let _res = execute(deps.as_mut(), env.clone(), info, msg).unwrap();

@@ -1,8 +1,11 @@
-use cosmwasm_std::{ensure, Addr, DepsMut, MessageInfo, Response, Uint128};
+use cosmwasm_std::{ensure, Addr, DepsMut, MessageInfo, Response, Uint128, WasmMsg};
 use euclid::{
     chain::ChainUid,
     error::ContractError,
-    msgs::virtual_balance::{ExecuteBurn, ExecuteMint, ExecuteTransfer, State},
+    msgs::{
+        hook::VoucherReceive,
+        virtual_balance::{ExecuteBurn, ExecuteMint, ExecuteTransfer, State},
+    },
     virtual_balance::BalanceKey,
 };
 
@@ -99,13 +102,13 @@ pub fn execute_transfer(
 
     let sender_balance_key = BalanceKey {
         token_id: msg.token_id.clone(),
-        cross_chain_user: msg.from,
+        cross_chain_user: msg.from.clone(),
     };
     let sender_key = sender_balance_key.clone().to_serialized_balance_key();
 
     let receiver_balance_key = BalanceKey {
         token_id: msg.token_id.clone(),
-        cross_chain_user: msg.to,
+        cross_chain_user: msg.to.clone(),
     };
     let receiver_key = receiver_balance_key.clone().to_serialized_balance_key();
 
@@ -136,12 +139,30 @@ pub fn execute_transfer(
 
     BALANCES.save(deps.storage, receiver_key, &receiver_new_balance)?;
 
-    Ok(Response::new()
+    let mut response = Response::new()
         .add_attribute("action", "execute_transfer")
         .add_attribute("transfer_amount", msg.amount)
         .add_attribute("from", format!("{sender_balance_key:?}"))
         .add_attribute("to", format!("{receiver_balance_key:?}"))
-        .add_attribute("burn_token_id", msg.token_id))
+        .add_attribute("burn_token_id", msg.token_id.clone());
+
+    if let Some(transfer_msg) = msg.msg {
+        // If its a voucher transfer msg, we need to send it to the receiver as voucher receive msg
+        let voucher_receive = VoucherReceive {
+            sender: msg.from.clone(),
+            token_id: msg.token_id.clone(),
+            amount: msg.amount,
+            msg: transfer_msg,
+        }
+        .to_receiver_msg()?;
+
+        response = response.add_message(WasmMsg::Execute {
+            contract_addr: msg.to.address.clone(),
+            msg: voucher_receive,
+            funds: vec![],
+        });
+    }
+    Ok(response)
 }
 
 pub fn execute_update_state(
